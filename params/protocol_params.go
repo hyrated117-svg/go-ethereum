@@ -189,10 +189,10 @@ const (
 
 	MaxBlockSize = 8_388_608 // maximum size of an RLP-encoded block
 
-	AccountCreationSize       = 112
-	StorageCreationSize       = 32
+	AccountCreationSize       = 120
+	StorageCreationSize       = 64
 	AuthorizationCreationSize = 23
-	CostPerStateByte          = 1174
+	CostPerStateByte          = 1530
 )
 
 // Bls12381G1MultiExpDiscountTable is the gas discount table for BLS12-381 G1 multi exponentiation operation

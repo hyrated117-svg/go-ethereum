@@ -753,26 +753,11 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		ret, result, vmerr = st.evm.Call(msg.From, st.to(), msg.Data, st.gasRemaining.ForwardAll(), value)
 		st.gasRemaining.Absorb(result)
 	}
+	// If this was a failed contract creation, refund the account creation costs.
 	if rules.IsAmsterdam {
-		if vmerr != nil {
-			// If this was a contract creation, refund the account creation costs.
-			if contractCreation {
-				refund := params.AccountCreationSize * st.evm.Context.CostPerStateByte
-				st.gasRemaining.RefundState(refund)
-			}
-		} else {
-			// Compute refunds for selfdestructed slots
-			cpsb := st.evm.Context.CostPerStateByte
-			var sdRefund uint64
-			for _, addr := range st.state.SameTxSelfDestructs() {
-				r := params.AccountCreationSize * cpsb
-				r += uint64(st.state.NewStorageSlotCount(addr)) * params.StorageCreationSize * cpsb
-				r += uint64(st.state.GetCodeSize(addr)) * cpsb
-				sdRefund += r
-			}
-			if sdRefund > 0 {
-				st.gasRemaining.RefundState(sdRefund)
-			}
+		if vmerr != nil && contractCreation {
+			refund := params.AccountCreationSize * st.evm.Context.CostPerStateByte
+			st.gasRemaining.RefundState(refund)
 		}
 	}
 
