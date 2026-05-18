@@ -152,9 +152,9 @@ func (c *Contract) chargeState(s uint64, logger *tracing.Hooks, reason tracing.G
 	return true
 }
 
-// RefundGas absorbs a sub-call's leftover GasBudget into this contract's gas
+// refundGas absorbs a sub-call's leftover GasBudget into this contract's gas
 // state. Thin wrapper around GasBudget.Absorb with tracer integration.
-func (c *Contract) RefundGas(child GasBudget, logger *tracing.Hooks, reason tracing.GasChangeReason) {
+func (c *Contract) refundGas(child GasBudget, logger *tracing.Hooks, reason tracing.GasChangeReason) {
 	prior := c.Gas
 	c.Gas.Absorb(child)
 	if logger.HasGasHook() && reason != tracing.GasChangeIgnored {

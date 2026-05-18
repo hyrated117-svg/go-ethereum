@@ -314,18 +314,20 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 			gas = contract.Gas
 		}
 	}
-	// When an error was returned by the EVM or when setting the creation code
-	// above we revert to the snapshot. gasFromExec below handles the
-	// regular-gas burn on halt.
+
+	// Calculate the remaining gas at the end of frame
+	exitGas := gas.Exit(err, initialStateGas)
 	if err != nil {
 		evm.StateDB.RevertToSnapshot(snapshot)
+
+		// Drain the leftover regular gas if unexceptional halt occurs
 		if err != ErrExecutionReverted {
 			if evm.Config.Tracer.HasGasHook() {
-				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), exitGas.AsTracing(), tracing.GasChangeCallFailedExecution)
 			}
 		}
 	}
-	return ret, gas.ExitFromErr(err, initialStateGas), err
+	return ret, exitGas, err
 }
 
 // CallCode executes the contract associated with the addr with the given input
@@ -366,15 +368,20 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 		ret, err = evm.Run(contract, input, false)
 		gas = contract.Gas
 	}
+
+	// Calculate the remaining gas at the end of frame
+	exitGas := gas.Exit(err, initialStateGas)
 	if err != nil {
 		evm.StateDB.RevertToSnapshot(snapshot)
+
+		// Drain the leftover regular gas if unexceptional halt occurs
 		if err != ErrExecutionReverted {
 			if evm.Config.Tracer.HasGasHook() {
-				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), exitGas.AsTracing(), tracing.GasChangeCallFailedExecution)
 			}
 		}
 	}
-	return ret, gas.ExitFromErr(err, initialStateGas), err
+	return ret, exitGas, err
 }
 
 // DelegateCall executes the contract associated with the addr with the given input
@@ -408,15 +415,20 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 		ret, err = evm.Run(contract, input, false)
 		gas = contract.Gas
 	}
+
+	// Calculate the remaining gas at the end of frame
+	exitGas := gas.Exit(err, initialStateGas)
 	if err != nil {
 		evm.StateDB.RevertToSnapshot(snapshot)
+
+		// Drain the leftover regular gas if unexceptional halt occurs
 		if err != ErrExecutionReverted {
 			if evm.Config.Tracer.HasGasHook() {
-				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), exitGas, tracing.GasChangeCallFailedExecution)
 			}
 		}
 	}
-	return ret, gas.ExitFromErr(err, initialStateGas), err
+	return ret, exitGas, err
 }
 
 // StaticCall executes the contract associated with the addr with the given input
@@ -458,15 +470,18 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 		ret, err = evm.Run(contract, input, true)
 		gas = contract.Gas
 	}
+
+	// Calculate the remaining gas at the end of frame
+	exitGas := gas.Exit(err, initialStateGas)
 	if err != nil {
 		evm.StateDB.RevertToSnapshot(snapshot)
 		if err != ErrExecutionReverted {
 			if evm.Config.Tracer.HasGasHook() {
-				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), tracing.Gas{}, tracing.GasChangeCallFailedExecution)
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), exitGas.AsTracing(), tracing.GasChangeCallFailedExecution)
 			}
 		}
 	}
-	return ret, gas.ExitFromErr(err, initialStateGas), err
+	return ret, exitGas, err
 }
 
 // create creates a new contract using code as deployment code.
@@ -578,7 +593,7 @@ func (evm *EVM) create(caller common.Address, code []byte, gas GasBudget, value 
 	if err != nil && (evm.chainRules.IsHomestead || err != ErrCodeStoreOutOfGas) {
 		evm.StateDB.RevertToSnapshot(snapshot)
 
-		exit := contract.Gas.ExitFromErr(err, initialStateGas)
+		exit := contract.Gas.Exit(err, initialStateGas)
 		if err != ErrExecutionReverted {
 			if evm.Config.Tracer.HasGasHook() {
 				evm.Config.Tracer.EmitGasChange(contract.Gas.AsTracing(), exit.AsTracing(), tracing.GasChangeCallFailedExecution)
