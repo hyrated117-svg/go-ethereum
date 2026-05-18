@@ -671,14 +671,9 @@ func gasSStore8037(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memo
 	}
 	if original == current {
 		if original == (common.Hash{}) { // create slot (2.1.1)
-			// EIP-8037: Return both regular and state gas. System calls do not charge state gas.
-			var stateGas uint64
-			if !contract.IsSystemCall {
-				stateGas = params.StorageCreationSize * evm.Context.CostPerStateByte
-			}
 			return GasCosts{
 				RegularGas: cost.RegularGas + params.SstoreResetGasEIP2200 - params.ColdSloadCostEIP2929,
-				StateGas:   stateGas,
+				StateGas:   params.StorageCreationSize * evm.Context.CostPerStateByte,
 			}, nil
 		}
 		if value == (common.Hash{}) { // delete slot (2.1.2b)

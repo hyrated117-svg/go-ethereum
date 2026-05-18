@@ -455,8 +455,7 @@ func (st *stateTransition) buyGas() error {
 	st.gasRemaining = st.initialBudget.Copy()
 
 	if st.evm.Config.Tracer.HasGasHook() {
-		empty := vm.GasBudget{}
-		st.evm.Config.Tracer.EmitGasChange(empty.AsTracing(), st.gasRemaining.AsTracing(), tracing.GasChangeTxInitialBalance)
+		st.evm.Config.Tracer.EmitGasChange(tracing.Gas{}, st.gasRemaining.AsTracing(), tracing.GasChangeTxInitialBalance)
 	}
 	// Deduct the gas cost from the sender's balance
 	st.state.SubBalance(st.msg.From, mgval, tracing.BalanceDecreaseGasBuy)
@@ -633,8 +632,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	//   3. Block pool: per-dimension inclusion reservation against the
 	//                  block gas pool (two-dimensional after Amsterdam,
 	//                  EIP-8037).
-	//   4. Floor pre:  EIP-7623 calldata floor must fit in the regular
-	//                  reservation.
+	//   4. Floor pre:  EIP-7623 calldata floor must fit in the gas allowance.
 	//   5. Top-call:   run the top-most call, ensuring sender can cover
 	//                  the value transfer of the top call frame; init-code
 	//                  size respects the cap.
@@ -679,18 +677,25 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		return nil, err
 	}
 
-	// Stage 4: validate the EIP-7623 calldata floor against the regular
-	// reservation. The floor inflates the block-regular column at tx
-	// end, so the regular dimension alone must be able to absorb it,
-	// checking the scalar `msg.GasLimit` would miss the case where
-	// the regular cap (MaxTxGas) is smaller than the floor.
+	// Stage 4: validate the EIP-7623 calldata floor against the gas limit.
+	// The floor inflates the total gas usage at tx end, so the gas limit
+	// must be sufficient to cover that.
 	if rules.IsPrague {
 		floorDataGas, err = FloorDataGas(rules, msg.Data, msg.AccessList)
 		if err != nil {
 			return nil, err
 		}
-		if !st.initialBudget.CanAfford(vm.GasCosts{RegularGas: floorDataGas}) {
+		// Make sure the transaction has sufficient gas allowance to
+		// pay the floor cost.
+		if msg.GasLimit < floorDataGas {
 			return nil, fmt.Errorf("%w: have %d, want %d", ErrIntrinsicGas, msg.GasLimit, floorDataGas)
+		}
+		// In Amsterdam, the transaction gas limit is allowed to exceed
+		// params.MaxTxGas, but the calldata floor cost is capped by it.
+		if rules.IsAmsterdam {
+			if max(cost.RegularGas, floorDataGas) < params.MaxTxGas {
+				return nil, fmt.Errorf("%w: regular intrisic cost %v, floor: %v", ErrFloorDataGas, cost.RegularGas, floorDataGas)
+			}
 		}
 	}
 
@@ -769,11 +774,18 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	st.gasRemaining.RefundRegular(st.calcRefund())
 
 	if rules.IsPrague {
-		// EIP-7623: data-heavy transactions pay at least the calldata
-		// floor. Deduct the deficit from regular only, Stage 4 ensured
-		// initialBudget.RegularGas >= floorDataGas, and state refunds
-		// in this tx can only undo state charges from this same tx, so
-		// gasRemaining.RegularGas is guaranteed to hold floor−used.
+		// We can always guarantee that the initial regular gas allowance
+		// is sufficient to cover the floor cost.
+		//
+		// Pre-Amsterdam, there is a single dimension and gas limit is greater
+		// than the floor cost.
+		//
+		// Since Amsterdam:
+		// - If GasLimit <= 16M, the state reservoir is initialized to 0,
+		//   and regular_gas_budget >= floor_cost always holds.
+		// - If GasLimit > 16M, the state reservoir is non-zero, while
+		//   regular_gas_budget == 16M, which is still guaranteed to be
+		//   greater than the floor cost.
 		if used := st.gasUsed(); used < floorDataGas {
 			prior, _ := st.gasRemaining.ChargeRegular(floorDataGas - used)
 			if st.evm.Config.Tracer.HasGasHook() {

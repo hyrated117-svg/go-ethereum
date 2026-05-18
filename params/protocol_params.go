@@ -193,6 +193,7 @@ const (
 	StorageCreationSize       = 64
 	AuthorizationCreationSize = 23
 	CostPerStateByte          = 1530
+	SystemMaxSStoresPerCall   = 16
 )
 
 // Bls12381G1MultiExpDiscountTable is the gas discount table for BLS12-381 G1 multi exponentiation operation
