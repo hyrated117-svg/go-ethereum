@@ -693,7 +693,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		// In Amsterdam, the transaction gas limit is allowed to exceed
 		// params.MaxTxGas, but the calldata floor cost is capped by it.
 		if rules.IsAmsterdam {
-			if max(cost.RegularGas, floorDataGas) < params.MaxTxGas {
+			if max(cost.RegularGas, floorDataGas) > params.MaxTxGas {
 				return nil, fmt.Errorf("%w: regular intrisic cost %v, floor: %v", ErrFloorDataGas, cost.RegularGas, floorDataGas)
 			}
 		}
