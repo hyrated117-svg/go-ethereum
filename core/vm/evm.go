@@ -424,7 +424,7 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 		// Drain the leftover regular gas if unexceptional halt occurs
 		if err != ErrExecutionReverted {
 			if evm.Config.Tracer.HasGasHook() {
-				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), exitGas, tracing.GasChangeCallFailedExecution)
+				evm.Config.Tracer.EmitGasChange(gas.AsTracing(), exitGas.AsTracing(), tracing.GasChangeCallFailedExecution)
 			}
 		}
 	}
