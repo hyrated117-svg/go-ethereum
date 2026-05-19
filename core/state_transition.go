@@ -770,6 +770,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	// Record the gas used excluding gas refunds. This value represents the actual
 	// gas allowance required to complete execution.
 	peakGasUsed := st.gasUsed()
+	peakRegular := st.gasRemaining.UsedRegularGas
 
 	// Compute refund counter, capped to a refund quotient.
 	st.gasRemaining.RefundRegular(st.calcRefund())
@@ -795,6 +796,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 			}
 		}
 		peakGasUsed = max(peakGasUsed, floorDataGas)
+		peakRegular = max(peakRegular, floorDataGas)
 	}
 
 	returned := st.returnGas()
@@ -813,9 +815,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		} else {
 			log.Error("Negative top-most frame state gas usage", "amount", st.gasRemaining.UsedStateGas)
 		}
-		// The regular gas usage is already inflated with the floor above,
-		// unnecessary to redo it here.
-		if err := st.gp.ChargeGasAmsterdam(st.gasRemaining.UsedRegularGas, txState, st.gasUsed()); err != nil {
+		if err := st.gp.ChargeGasAmsterdam(peakRegular, txState, st.gasUsed()); err != nil {
 			return nil, err
 		}
 	} else {
