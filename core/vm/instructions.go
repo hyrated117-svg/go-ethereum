@@ -711,10 +711,12 @@ func opCreate2(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 	}
 	scope.Stack.push(&stackvalue)
 	scope.Contract.refundGas(result, evm.Config.Tracer, tracing.GasChangeCallLeftOverRefunded)
-	if evm.chainRules.IsAmsterdam && suberr != nil {
-		scope.Contract.Gas.RefundState(params.AccountCreationSize * evm.Context.CostPerStateByte)
-	}
 
+	// If the creation frame reverts or halts exceptionally, the charged state-gas
+	// is refilled back to the state reservoir in Amsterdam.
+	if evm.chainRules.IsAmsterdam && suberr != nil {
+		scope.Contract.refundState(params.AccountCreationSize*evm.Context.CostPerStateByte, evm.Config.Tracer, tracing.GasChangeStateGasRefund)
+	}
 	if suberr == ErrExecutionReverted {
 		evm.returnData = res // set REVERT data to return data buffer
 		return res, nil
@@ -754,11 +756,24 @@ func opCall(pc *uint64, evm *EVM, scope *ScopeContext) ([]byte, error) {
 		temp.SetOne()
 	}
 	stack.push(&temp)
+
 	if err == nil || err == ErrExecutionReverted {
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
 	}
-
 	scope.Contract.refundGas(result, evm.Config.Tracer, tracing.GasChangeCallLeftOverRefunded)
+
+	// If the call frame reverts or halts exceptionally, the charged state-gas
+	// is refilled back to the state reservoir in Amsterdam.
+	//
+	// The state-gas should only be refunded if the state creation doesn't
+	// happens, such as ErrDepth, ErrInsufficientBalance.
+	//
+	// TODO(rjl) it's so ugly, please rework it.
+	if evm.chainRules.IsAmsterdam && err != nil {
+		if (err == ErrDepth || err == ErrInsufficientBalance) && !value.IsZero() && evm.StateDB.Empty(toAddr) {
+			scope.Contract.refundState(params.AccountCreationSize*evm.Context.CostPerStateByte, evm.Config.Tracer, tracing.GasChangeStateGasRefund)
+		}
+	}
 
 	evm.returnData = ret
 	return ret, nil

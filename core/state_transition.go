@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
@@ -603,7 +604,7 @@ func (st *stateTransition) reserveBlockGasBudget(rules params.Rules, gasLimit ui
 		}
 		err = st.gp.CheckGasAmsterdam(regularReservation, stateReservation)
 	} else {
-		err = st.gp.SubGas(gasLimit)
+		err = st.gp.CheckGasLegacy(gasLimit)
 	}
 	return err
 }
@@ -785,7 +786,8 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		//   and regular_gas_budget >= floor_cost always holds.
 		// - If GasLimit > 16M, the state reservoir is non-zero, while
 		//   regular_gas_budget == 16M, which is still guaranteed to be
-		//   greater than the floor cost.
+		//   greater than the floor cost. The extra cost should be deducted
+		//   from the regular even the state reservoir is non-zero.
 		if used := st.gasUsed(); used < floorDataGas {
 			prior, _ := st.gasRemaining.ChargeRegular(floorDataGas - used)
 			if st.evm.Config.Tracer.HasGasHook() {
@@ -801,19 +803,23 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		// st.gasRemaining.UsedRegularGas / UsedStateGas already include both
 		// the intrinsic charge (from st.gasRemaining.Charge(cost) above) and
 		// the per-frame exec contributions absorbed from evm.Call / evm.Create.
-		// UsedStateGas may be negative when inline refunds (SSTORE 0→x→0,
-		// CREATE-failure refund, 7702 auth refund, same-tx-SD refund) exceed
-		// intrinsic + exec state charges. Clamp at 0.
+		//
+		// UsedStateGas should never become negative in the top-most frame, since
+		// state gas refunds only occur when state creation is reverted within the
+		// same transaction, while clearing pre-existing state is never refunded.
 		var txState uint64
-		if st.gasRemaining.UsedStateGas > 0 {
+		if st.gasRemaining.UsedStateGas >= 0 {
 			txState = uint64(st.gasRemaining.UsedStateGas)
+		} else {
+			log.Error("Negative top-most frame state gas usage", "amount", st.gasRemaining.UsedStateGas)
 		}
-		txRegular := max(st.gasRemaining.UsedRegularGas, floorDataGas)
-		if err := st.gp.ChargeGasAmsterdam(txRegular, txState, st.gasUsed()); err != nil {
+		// The regular gas usage is already inflated with the floor above,
+		// unnecessary to redo it here.
+		if err := st.gp.ChargeGasAmsterdam(st.gasRemaining.UsedRegularGas, txState, st.gasUsed()); err != nil {
 			return nil, err
 		}
 	} else {
-		if err = st.gp.ReturnGas(returned, st.gasUsed()); err != nil {
+		if err = st.gp.ChargeGasLegacy(returned, st.gasUsed()); err != nil {
 			return nil, err
 		}
 	}
@@ -944,18 +950,15 @@ func (st *stateTransition) calcRefund() uint64 {
 	return refund
 }
 
-// returnGas returns ETH for remaining gas,
-// exchanged at the original rate.
+// returnGas returns ETH for remaining gas, exchanged at the original rate.
 func (st *stateTransition) returnGas() uint64 {
 	gas := st.gasRemaining.RegularGas + st.gasRemaining.StateGas
 	remaining := uint256.NewInt(st.gasRemaining.RegularGas)
 	remaining.Mul(remaining, st.msg.GasPrice)
 	st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
 
-	if st.gasRemaining.RegularGas > 0 && st.evm.Config.Tracer.HasGasHook() {
-		after := st.gasRemaining
-		after.RegularGas = 0
-		st.evm.Config.Tracer.EmitGasChange(st.gasRemaining.AsTracing(), after.AsTracing(), tracing.GasChangeTxLeftOverReturned)
+	if !st.gasRemaining.IsZero() && st.evm.Config.Tracer.HasGasHook() {
+		st.evm.Config.Tracer.EmitGasChange(st.gasRemaining.AsTracing(), tracing.Gas{}, tracing.GasChangeTxLeftOverReturned)
 	}
 	return gas
 }

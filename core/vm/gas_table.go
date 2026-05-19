@@ -460,10 +460,10 @@ func gasCallIntrinsic(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 	return gas, nil
 }
 
-// gasCallIntrinsic8037 is the intrinsic gas calculator for CALL in Amsterdam.
+// regularGasCall8037 is the intrinsic gas calculator for CALL in Amsterdam.
 // It computes memory expansion + value transfer gas but excludes new account
 // creation, which is handled as state gas by the wrapper.
-func gasCallIntrinsic8037(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
+func regularGasCall8037(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (uint64, error) {
 	var (
 		gas            uint64
 		transfersValue = !stack.back(2).IsZero()
@@ -571,7 +571,10 @@ func gasCreateEip8037(evm *EVM, contract *Contract, stack *Stack, mem *Memory, m
 	words := (size + 31) / 32
 	wordGas := params.InitCodeWordGas * words
 	stateGas := params.AccountCreationSize * evm.Context.CostPerStateByte
-	return GasCosts{RegularGas: gas + wordGas, StateGas: stateGas}, nil
+	return GasCosts{
+		RegularGas: gas + wordGas,
+		StateGas:   stateGas,
+	}, nil
 }
 
 func gasCreate2Eip8037(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (GasCosts, error) {
@@ -591,28 +594,35 @@ func gasCreate2Eip8037(evm *EVM, contract *Contract, stack *Stack, mem *Memory, 
 	}
 	// Since size <= MaxInitCodeSizeAmsterdam, these multiplications cannot overflow
 	words := (size + 31) / 32
-	// CREATE2 charges both InitCodeWordGas (EIP-3860) and Keccak256WordGas (for address hashing).
+
+	// CREATE2 charges both InitCodeWordGas (EIP-3860) and Keccak256WordGas
+	// (for address hashing).
 	wordGas := (params.InitCodeWordGas + params.Keccak256WordGas) * words
 	stateGas := params.AccountCreationSize * evm.Context.CostPerStateByte
-	return GasCosts{RegularGas: gas + wordGas, StateGas: stateGas}, nil
+	return GasCosts{
+		RegularGas: gas + wordGas,
+		StateGas:   stateGas,
+	}, nil
 }
 
-// gasCall8037 is the stateful gas calculator for CALL in Amsterdam (EIP-8037).
+// stateGasCall8037 is the stateful gas calculator for CALL in Amsterdam (EIP-8037).
 // It only returns the state-dependent gas (account creation as state gas).
 // Memory gas, transfer gas, and callGas are handled by gasCallStateless and
 // makeCallVariantGasCall.
-func gasCall8037(evm *EVM, contract *Contract, stack *Stack, mem *Memory, memorySize uint64) (GasCosts, error) {
+func stateGasCall8037(evm *EVM, contract *Contract, stack *Stack) (uint64, error) {
 	var (
-		gas            GasCosts
+		gas            uint64
 		transfersValue = !stack.back(2).IsZero()
 		address        = common.Address(stack.back(1).Bytes20())
 	)
+	// TODO(rjl, marius), can EIP8037 implicitly means the EIP158 is also activated?
+	// It's technically possible to skip the EIP158 but very unlikely in practice.
 	if evm.chainRules.IsEIP158 {
 		if transfersValue && evm.StateDB.Empty(address) {
-			gas.StateGas += params.AccountCreationSize * evm.Context.CostPerStateByte
+			gas += params.AccountCreationSize * evm.Context.CostPerStateByte
 		}
 	} else if !evm.StateDB.Exist(address) {
-		gas.StateGas += params.AccountCreationSize * evm.Context.CostPerStateByte
+		gas += params.AccountCreationSize * evm.Context.CostPerStateByte
 	}
 	return gas, nil
 }
