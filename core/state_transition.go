@@ -781,21 +781,25 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	st.gasRemaining.RefundRegular(st.calcRefund())
 
 	if rules.IsPrague {
-		// We can always guarantee that the initial regular gas allowance
-		// is sufficient to cover the floor cost.
-		//
-		// Pre-Amsterdam, there is a single dimension and gas limit is greater
-		// than the floor cost.
-		//
-		// Since Amsterdam:
-		// - If GasLimit <= 16M, the state reservoir is initialized to 0,
-		//   and regular_gas_budget >= floor_cost always holds.
-		// - If GasLimit > 16M, the state reservoir is non-zero, while
-		//   regular_gas_budget == 16M, which is still guaranteed to be
-		//   greater than the floor cost. The extra cost should be deducted
-		//   from the regular even the state reservoir is non-zero.
+		// EIP-7623 floor: tx_gas_used_after_refund = max(used, calldata_floor).
+		// Drain the leftover gas budget — regular first, then state — to bring
+		// gasUsed up to the floor. State must be drained too because a failed
+		// contract-creation top-level refund (line ~770) can move otherwise-spent
+		// gas back into the state reservoir, leaving RegularGas too small to
+		// satisfy the floor on its own.
 		if used := st.gasUsed(); used < floorDataGas {
-			prior, _ := st.gasRemaining.ChargeRegular(floorDataGas - used)
+			prior := st.gasRemaining
+			need := floorDataGas - used
+			if take := min(need, st.gasRemaining.RegularGas); take > 0 {
+				st.gasRemaining.RegularGas -= take
+				st.gasRemaining.UsedRegularGas += take
+				need -= take
+			}
+			if take := min(need, st.gasRemaining.StateGas); take > 0 {
+				st.gasRemaining.StateGas -= take
+				st.gasRemaining.UsedStateGas += int64(take)
+				need -= take
+			}
 			if st.evm.Config.Tracer.HasGasHook() {
 				st.evm.Config.Tracer.EmitGasChange(prior.AsTracing(), st.gasRemaining.AsTracing(), tracing.GasChangeTxDataFloor)
 			}
@@ -902,6 +906,8 @@ func (st *stateTransition) applyAuthorization(rules params.Rules, auth *types.Se
 		return err
 	}
 
+	prevDelegation, isDelegated := types.ParseDelegation(st.state.GetCode(authority))
+
 	// If the account already exists in state, refund the new account cost
 	// charged in the intrinsic calculation.
 	if st.state.Exist(authority) {
@@ -912,8 +918,17 @@ func (st *stateTransition) applyAuthorization(rules params.Rules, auth *types.Se
 			st.state.AddRefund(params.CallNewAccountGas - params.TxAuthTupleGas)
 		}
 	}
-
-	prevDelegation, isDelegated := types.ParseDelegation(st.state.GetCode(authority))
+	if rules.IsAmsterdam {
+		// EIP-8037: also refund the auth-base state gas when no new delegation
+		// indicator bytes are written. Two cases:
+		//   - the authority already has a delegation (overwrite in place); or
+		//   - the auth clears the delegation (auth.Address == 0).
+		// In both cases the 23 delegation bytes are reused, so the auth-base
+		// portion of the intrinsic state gas is refilled.
+		if isDelegated || auth.Address == (common.Address{}) {
+			st.gasRemaining.RefundState(params.AuthorizationCreationSize * st.evm.Context.CostPerStateByte)
+		}
+	}
 
 	// Update nonce and account code.
 	st.state.SetNonce(authority, auth.Nonce+1, tracing.NonceChangeAuthorization)
@@ -958,7 +973,7 @@ func (st *stateTransition) calcRefund() uint64 {
 // returnGas returns ETH for remaining gas, exchanged at the original rate.
 func (st *stateTransition) returnGas() uint64 {
 	gas := st.gasRemaining.RegularGas + st.gasRemaining.StateGas
-	remaining := uint256.NewInt(st.gasRemaining.RegularGas)
+	remaining := uint256.NewInt(gas)
 	remaining.Mul(remaining, st.msg.GasPrice)
 	st.state.AddBalance(st.msg.From, remaining, tracing.BalanceIncreaseGasReturn)
 

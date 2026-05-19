@@ -173,8 +173,7 @@ func (g *GasBudget) RefundRegular(s uint64) {
 
 // Forward drains `regular` regular gas and the entire state reservoir from
 // the parent's running budget and returns the initial GasBudget for a child
-// frame. The parent's UsedRegularGas is bumped by the forwarded amount so
-// that the absorb-on-return path correctly reclaims the unused portion.
+// frame.
 //
 // Used by frame boundaries where the regular forward has NOT been pre-
 // deducted: tx-level dispatch (state_transition) and CREATE / CREATE2. The
@@ -185,7 +184,6 @@ func (g *GasBudget) RefundRegular(s uint64) {
 // apply any EIP-150 1/64 retention before calling Forward.
 func (g *GasBudget) Forward(regular uint64) GasBudget {
 	g.RegularGas -= regular
-	g.UsedRegularGas += regular
 
 	child := GasBudget{
 		RegularGas: regular,
@@ -251,13 +249,24 @@ func (g GasBudget) ExitRevert() GasBudget {
 }
 
 // ExitHalt produces the leftover form for an exceptional halt. Remaining
-// regular gas is accounted as burned; the reservoir resets to initialStateGas
-// (the value the caller held at the call site). UsedStateGas is zeroed
-// because state-gas effects do not persist on halt.
+// regular gas is burned into UsedRegularGas; the state dimension follows the
+// same revert-style formula as ExitRevert because the spec routes both halt
+// and revert through incorporate_child_on_error:
+//
+//	parent.state_gas_left = parent + child.state_gas_used + child.state_gas_left
+//
+// which in our model means returning `StateGas + UsedStateGas` to the parent
+// and zeroing the per-frame counter. initialStateGas is kept for signature
+// compatibility but no longer consulted (the running budget carries the
+// information).
 func (g GasBudget) ExitHalt(initialStateGas uint64) GasBudget {
+	reservoir := int64(g.StateGas) + g.UsedStateGas
+	if reservoir < 0 {
+		reservoir = 0
+	}
 	return GasBudget{
 		RegularGas:     0,
-		StateGas:       initialStateGas,
+		StateGas:       uint64(reservoir),
 		UsedRegularGas: g.UsedRegularGas + g.RegularGas,
 		UsedStateGas:   0,
 	}
@@ -284,18 +293,22 @@ func (g GasBudget) Exit(err error, initialStateGas uint64) GasBudget {
 }
 
 // Absorb merges a sub-call's leftover GasBudget into this (caller's) running
-// budget. The caller's UsedRegularGas is reclaimed by the unused forwarded
-// regular gas (which was pre-charged in full at call entry); the state
-// reservoir is overwritten with the child's leftover; and the child's signed
-// net state-gas usage is added to the caller's accumulator.
+// budget.
 //
-// Invariant maintained by all callers: at the moment of this call, the
-// caller's UsedRegularGas already accounts for the FULL forwarded regular
-// gas (as if the child had consumed all of it). On halt, child.RegularGas
-// is 0 so the reclaim is a no-op.
+//   - RegularGas: the child's leftover regular gas flows back to the caller.
+//   - UsedRegularGas: the child's own gross regular-gas consumption is added
+//     to the caller's accumulator. Combined with the caller having NOT
+//     pre-bumped UsedRegularGas by the forwarded amount, this matches the
+//     spec's escrow_subcall_regular_gas + incorporate_child_* pattern: only
+//     opcode charges count towards regular_gas_used, never state-gas
+//     spillover or escrowed forwards.
+//   - StateGas: the reservoir is overwritten by the child's leftover (spec's
+//     incorporate_child_on_success / on_error formula for state_gas_left).
+//   - UsedStateGas: the child's signed net state-gas usage is added to the
+//     caller's accumulator (spec's incorporate child gas).
 func (g *GasBudget) Absorb(child GasBudget) {
-	g.UsedRegularGas -= child.RegularGas
 	g.RegularGas += child.RegularGas
+	g.UsedRegularGas += child.UsedRegularGas
 	g.StateGas = child.StateGas
 	g.UsedStateGas += child.UsedStateGas
 }

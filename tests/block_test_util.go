@@ -38,7 +38,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/types/bal"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -73,7 +72,7 @@ type btBlock struct {
 	ExpectException string
 	Rlp             string
 	UncleHeaders    []*btHeader
-	AccessList      *bal.BlockAccessList `json:"blockAccessList,omitempty"`
+	AccessList      json.RawMessage `json:"blockAccessList,omitempty"`
 }
 
 //go:generate go run github.com/fjl/gencodec -type btHeader -field-override btHeaderMarshaling -out gen_btheader.go
